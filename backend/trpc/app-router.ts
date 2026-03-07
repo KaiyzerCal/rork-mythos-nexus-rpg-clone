@@ -3,6 +3,7 @@ import hiRoute from "./routes/example/hi/route";
 import healthStatus from "./routes/health/status";
 import systemSnapshot from "./routes/system/snapshot";
 import systemSync from "./routes/system/sync";
+import buildsGetSnapshotBuildStatus from "./routes/builds/get-snapshot-build-status";
 import questsList from "./routes/quests/list";
 import questsCreateDraft from "./routes/quests/create-draft";
 import questsApprove from "./routes/quests/approve";
@@ -21,6 +22,9 @@ export const appRouter = createTRPCRouter({
   system: createTRPCRouter({
     getSystemSnapshot: systemSnapshot,
     syncNow: systemSync,
+  }),
+  builds: createTRPCRouter({
+    getSnapshotBuildStatus: buildsGetSnapshotBuildStatus,
   }),
   quests: createTRPCRouter({
     list: questsList,
