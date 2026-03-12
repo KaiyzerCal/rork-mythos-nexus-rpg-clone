@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Cpu, Send, Sparkles, Brain, MessageSquare, Heart, Target, Flame, X, Crown, Zap, Users, Activity, ArrowDown, StopCircle, Copy, Check } from 'lucide-react-native';
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useGame } from '@/contexts/GameContext';
 import { useMavisMemory } from '@/contexts/MavisMemoryContext';
 import { useMavisPrimeMemory } from '@/contexts/MavisPrimePersistentMemory';
@@ -64,7 +64,7 @@ const MAVIS_BOARD_STATE_KEY = 'mavis_board_active';
 export default function MavisScreen() {
   const insets = useSafeAreaInsets();
   const { gameState, addXP, addVaultEntry } = useGame();
-  const { getMemoryContext, autoSaveFromConversation, conversationThreads, memoryItems, isLoaded: memoryLoaded } = useMavisMemory();
+  const { getMemoryContext, autoSaveFromConversation, conversationThreads, memoryItems } = useMavisMemory();
   const primeMemory = useMavisPrimeMemory();
   const [input, setInput] = useState('');
   const [selectedMode, setSelectedMode] = useState<'chat' | 'cbt' | 'ritual' | 'board' | 'commands' | null>('chat');
@@ -79,137 +79,140 @@ export default function MavisScreen() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [manualStopped, setManualStopped] = useState(false);
 
-  const buildFullSystemContext = () => {
-    const { 
-      stats, identity, currentForm, currentBPM, energySystems, transformations, 
-      quests, vaultEntries, realWorldModules, councils, skillTrees,
-      dailyRituals, inventoryV2, roster, allies, currencies, currentFloor, gpr, pvpRating, arcStory, tasks
+  const buildVaultDigest = () => {
+    const { vaultEntries } = gameState;
+
+    if (vaultEntries.length === 0) {
+      return 'VAULT: empty';
+    }
+
+    const recentHighSignal = [...vaultEntries]
+      .sort((a, b) => {
+        const importanceRank = { critical: 4, high: 3, medium: 2, low: 1 } as const;
+        const scoreDelta = importanceRank[b.importance] - importanceRank[a.importance];
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        return b.timestamp - a.timestamp;
+      })
+      .slice(0, 8)
+      .map((entry) => {
+        const excerpt = entry.content.replace(/\s+/g, ' ').trim().slice(0, 90);
+        return `- [${entry.category}/${entry.importance}] ${entry.title}: ${excerpt}${entry.content.length > 90 ? '...' : ''}`;
+      })
+      .join('\n');
+
+    const categoryCounts = vaultEntries.reduce<Record<string, number>>((acc, entry) => {
+      acc[entry.category] = (acc[entry.category] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const importanceCounts = vaultEntries.reduce<Record<string, number>>((acc, entry) => {
+      acc[entry.importance] = (acc[entry.importance] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    return `VAULT (${vaultEntries.length} total)\nCategory counts: ${Object.entries(categoryCounts).map(([key, value]) => `${key}:${value}`).join(' • ')}\nImportance counts: ${Object.entries(importanceCounts).map(([key, value]) => `${key}:${value}`).join(' • ')}\nRecent high-signal entries:\n${recentHighSignal}`;
+  };
+
+  const buildCompactSystemContext = () => {
+    const {
+      stats, identity, currentForm, currentBPM, energySystems, transformations,
+      quests, realWorldModules, councils, skillTrees,
+      dailyRituals, inventoryV2, roster, allies, currencies, currentFloor, gpr, pvpRating, arcStory, tasks,
     } = gameState;
-    
-    const activeQuests = quests.filter(q => q.status === 'active');
-    const completedQuests = quests.filter(q => q.status === 'completed');
-    const todayRituals = dailyRituals.filter(r => !r.completed);
-    const completedRituals = dailyRituals.filter(r => r.completed);
-    const unlockedSkills = skillTrees.filter(s => s.unlocked);
-    const lockedSkills = skillTrees.filter(s => !s.unlocked);
-    const mainCouncils = councils;
-    const allAllies = allies;
-    const allVault = vaultEntries;
-    const equippedItems = inventoryV2.filter(i => i.slot !== 'Storage');
-    const storageItems = inventoryV2.filter(i => i.slot === 'Storage');
-    const allRoster = roster;
-    const activeTasks = tasks.filter(t => t.status === 'active');
-    const completedTasks = tasks.filter(t => t.status === 'completed');
-    
-    return `=== COMPREHENSIVE SYSTEM CONTEXT — FULL ACCESS ===
 
-📋 IDENTITY:
+    const activeQuests = quests.filter((q) => q.status === 'active');
+    const completedQuestsCount = quests.filter((q) => q.status === 'completed').length;
+    const pendingRituals = dailyRituals.filter((r) => !r.completed);
+    const completedRitualsCount = dailyRituals.filter((r) => r.completed).length;
+    const unlockedSkills = skillTrees.filter((s) => s.unlocked);
+    const lockedSkillsCount = skillTrees.length - unlockedSkills.length;
+    const masteredEnergySystems = energySystems.filter((e) => e.status === 'mastered' || e.status === 'perfect');
+    const unlockedTransformations = transformations.filter((t) => t.unlocked);
+    const activeTasks = tasks.filter((t) => t.status === 'active');
+    const completedTasksCount = tasks.filter((t) => t.status === 'completed').length;
+    const equippedItems = inventoryV2.filter((i) => i.slot !== 'Storage');
+
+    const activeQuestLines = activeQuests.slice(0, 6).map((quest) => `- ${quest.title}${quest.progress ? ` (${quest.progress.current}/${quest.progress.target})` : ''}${quest.realWorldMapping ? ` • ${quest.realWorldMapping}` : ''}`).join('\n') || '- none';
+    const activeTaskLines = activeTasks.slice(0, 6).map((task) => `- ${task.title} [${task.type}]${task.streak ? ` • streak ${task.streak}` : ''}`).join('\n') || '- none';
+    const ritualLines = pendingRituals.slice(0, 5).map((ritual) => `- ${ritual.name} (${ritual.type}) • +${ritual.xpReward} XP`).join('\n') || '- none';
+    const skillLines = unlockedSkills.slice(0, 8).map((skill) => `- ${skill.name} (${skill.energyType})`).join('\n') || '- none';
+    const transformationLines = unlockedTransformations.slice(0, 6).map((form) => `- ${form.name} • ${form.tier} • ${form.bpmRange} BPM`).join('\n') || '- none';
+    const energyLines = masteredEnergySystems.slice(0, 6).map((energy) => `- ${energy.type}: ${energy.current}/${energy.max} (${energy.status ?? 'active'})`).join('\n') || '- none';
+    const equippedLines = equippedItems.slice(0, 6).map((item) => `- [${item.slot}] ${item.name} (${item.tier})`).join('\n') || '- none';
+    const councilLines = councils.slice(0, 6).map((member: any) => `- ${member.name} • ${member.role}${member.specialty ? ` • ${member.specialty}` : ''}`).join('\n') || '- none';
+
+    return `=== COMPACT SYSTEM STATE ===
+IDENTITY
 - Name: ${identity.inscribedName}
-- Titles: ${identity.titles.join(' • ')}
-- Species Lineage: ${identity.speciesLineage.join(' → ')}
+- Titles: ${identity.titles.slice(0, 4).join(' • ')}
 - Territory: ${identity.territory.class}
-- Tower Floors: ${identity.territory.towerFloorsInfluence}
-- Arc Story: ${arcStory || 'Unknown'}
+- Floors: ${identity.territory.towerFloorsInfluence}
+- Arc: ${arcStory || 'Unknown'}
 
-⚡ CURRENT STATUS:
-- Level ${stats.level} | Rank ${stats.rank} | XP: ${stats.xp}/${stats.xpToNextLevel}
-- Current Form: ${currentForm} (${currentBPM} BPM - energetic vibration, NOT heart rate)
-- Fatigue: ${stats.fatigue}/100 | Full Cowl Sync: ${stats.fullCowlSync}% | Codex Integrity: ${stats.codexIntegrity}%
+STATUS
+- Level ${stats.level} • Rank ${stats.rank} • XP ${stats.xp}/${stats.xpToNextLevel}
+- Form: ${currentForm} • ${currentBPM} BPM energetic state
+- Fatigue ${stats.fatigue}/100 • Sync ${stats.fullCowlSync}% • Integrity ${stats.codexIntegrity}%
 - Stats: STR ${stats.STR} • AGI ${stats.AGI} • VIT ${stats.VIT} • INT ${stats.INT} • WIS ${stats.WIS} • CHA ${stats.CHA} • LCK ${stats.LCK}
-- Tower Floor: ${currentFloor} | GPR: ${gpr} | PVP Rating: ${pvpRating}
-- Aura Power: ${stats.auraPower}
+- Floor ${currentFloor} • GPR ${gpr} • PVP ${pvpRating}
+- Aura: ${stats.auraPower}
 
-💰 CURRENCIES:
-${currencies.map(c => `- ${c.icon} ${c.name}: ${c.amount}`).join('\n')}
+ACTIVE QUESTS (${activeQuests.length})
+${activeQuestLines}
+Completed quests: ${completedQuestsCount}
 
-🌀 ENERGY SYSTEMS — ALL ${energySystems.length} SYSTEMS:
-${energySystems.map(e => `- ${e.type}: ${e.current}/${e.max} (${e.status}) - ${e.description}`).join('\n')}
+ACTIVE TASKS (${activeTasks.length})
+${activeTaskLines}
+Completed tasks: ${completedTasksCount}
 
-🔥 TRANSFORMATIONS — ALL ${transformations.length} FORMS:
-${transformations.map(t => {
-  const bpm = Array.isArray(t.bpmRange) ? `${t.bpmRange[0]}-${t.bpmRange[1]}` : t.bpmRange;
-  return `- ${t.name} (${bpm} BPM) [${t.tier}] - ${t.jjkGrade} | ${t.opTier} | ${t.unlocked ? 'UNLOCKED' : 'LOCKED'}`;
-}).join('\n')}
+PENDING RITUALS (${pendingRituals.length})
+${ritualLines}
+Completed rituals: ${completedRitualsCount}
 
-⚔️ SKILLS & ABILITIES — COMPLETE LIST:
-UNLOCKED SKILLS (${unlockedSkills.length}):
-${unlockedSkills.map(s => `- ${s.name} (${s.energyType}) Tier ${s.tier} - ${s.description}`).join('\n')}
+UNLOCKED SKILLS (${unlockedSkills.length})
+${skillLines}
+Locked skills: ${lockedSkillsCount}
 
-LOCKED SKILLS (${lockedSkills.length}):
-${lockedSkills.map(s => `- ${s.name} (${s.energyType}) Tier ${s.tier} - Cost: ${s.cost} CP - ${s.description}`).join('\n')}
+UNLOCKED TRANSFORMATIONS (${unlockedTransformations.length}/${transformations.length})
+${transformationLines}
 
-🎯 QUESTS — FULL QUEST LOG:
-ACTIVE QUESTS (${activeQuests.length}):
-${activeQuests.map(q => `- ${q.title}: ${q.progress ? `${q.progress.current}/${q.progress.target}` : 'ongoing'} (${q.xpReward} XP)${q.realWorldMapping ? ` - Real-World: ${q.realWorldMapping}` : ''}\n  Description: ${q.description}`).join('\n')}
+CORE ENERGY SYSTEMS (${masteredEnergySystems.length}/${energySystems.length} mastered-or-perfect)
+${energyLines}
 
-COMPLETED QUESTS (${completedQuests.length}):
-${completedQuests.map(q => `- ${q.title} (${q.xpReward} XP)${q.realWorldMapping ? ` - ${q.realWorldMapping}` : ''}`).join('\n')}
+COUNCIL SNAPSHOT (${councils.length} total)
+${councilLines}
 
-✅ TASKS & HABITS — FULL TASK SYSTEM:
-ACTIVE TASKS (${activeTasks.length}):
-${activeTasks.map(t => `- ${t.title} [${t.type}] ${t.recurrence} (${t.xpReward} XP)${t.skillXpReward ? ` +${t.skillXpReward} Skill XP` : ''}\n  Streak: ${t.streak || 0} | Completed: ${t.completedCount}x${t.linkedSkillId ? ` | Linked to: ${t.linkedSkillId}` : ''}`).join('\n')}
+INVENTORY SNAPSHOT
+- Equipped: ${equippedItems.length}
+- Stored: ${inventoryV2.length - equippedItems.length}
+${equippedLines}
 
-COMPLETED TASKS (${completedTasks.length}):
-${completedTasks.map(t => `- ${t.title} [${t.type}] - Completed ${t.completedCount}x`).join('\n')}
+NETWORK
+- Allies: ${allies.length}
+- Roster entries: ${roster.length}
+- Currencies: ${currencies.map((currency) => `${currency.icon} ${currency.name}:${currency.amount}`).join(' • ')}
 
-📅 DAILY RITUALS:
-PENDING TODAY (${todayRituals.length}):
-${todayRituals.map(r => `- ${r.name} (${r.type}): +${r.xpReward} XP - Streak: ${r.streak}\n  ${r.description}`).join('\n')}
+REAL-WORLD MODULES
+- Fitness target: ${realWorldModules.fitness.habitTargets.weekSessions} sessions/week
+- Business nodes: ${realWorldModules.business.nodes.slice(0, 4).join(' • ')}
+- Legal case: ${realWorldModules.legalCase.coreStory}
+- Legal next steps: ${realWorldModules.legalCase.nextSteps.slice(0, 4).join(' • ')}
+- Relationship safety: ${realWorldModules.relationships.safetyRules.join(' • ')}
 
-COMPLETED TODAY (${completedRituals.length}):
-${completedRituals.map(r => `- ${r.name} (${r.type}) - Streak: ${r.streak}`).join('\n')}
+${buildVaultDigest()}
 
-👥 COUNCILS — ALL COUNCIL MEMBERS (${councils.length} total):
-${mainCouncils.map((c: any) => `- ${c.name} [${c.class?.toUpperCase() || 'MEMBER'}]\n  Role: ${c.role}${c.specialty ? ` | Specialty: ${c.specialty}` : ''}\n  Notes: ${c.notes}`).join('\n')}
-
-🤝 ALLIES — COMPLETE ROSTER (${allAllies.length} total):
-${allAllies.length > 0 ? allAllies.map(a => `- ${a.name} (${a.relationship}) Level ${a.level}\n  Specialty: ${a.specialty} | Affinity: ${a.affinity}%`).join('\n') : 'No allies registered yet.'}
-
-🎒 INVENTORY — FULL INVENTORY:
-EQUIPPED ITEMS (${equippedItems.length}):
-${equippedItems.map(i => `- [${i.slot}] ${i.name} (${i.tier})\n  ${i.description}\n  Effects: ${i.effects.map(e => `${e.label} ${e.value > 0 ? '+' : ''}${e.value}${e.unit}`).join(', ')}`).join('\n')}
-
-STORAGE ITEMS (${storageItems.length}):
-${storageItems.map(i => `- ${i.name} (${i.tier}) - ${i.description}`).join('\n')}
-
-📊 COMPLETE ROSTER — ALL ${allRoster.length} ENTRIES:
-${allRoster.map(r => `- ${r.display} [${r.role.toUpperCase()}]\n  Rank: ${r.rank} | Level ${r.level} | ${r.jjkGrade} | ${r.opTier}\n  GPR: ${r.gpr} | PVP: ${r.pvp} | Influence: ${r.influence}\n  Notes: ${r.notes}`).join('\n')}
-
-🔒 VAULT CODEX — ALL ${allVault.length} ENTRIES:
-${allVault.length > 0 ? allVault.map(v => `- [${v.category.toUpperCase()}] ${v.title} (${v.importance})\n  ${new Date(v.timestamp).toLocaleDateString()} - ${v.content.substring(0, 150)}${v.content.length > 150 ? '...' : ''}`).join('\n') : 'No vault entries yet.'}
-
-🏋️ REAL-WORLD MODULES — COMPLETE DETAILS:
-FITNESS MODULE:
-  - Weekly Target: ${realWorldModules.fitness.habitTargets.weekSessions} training sessions
-  - Recovery Days: ${realWorldModules.fitness.habitTargets.recoveryDays} per week
-  - Mobility Days: ${realWorldModules.fitness.habitTargets.mobilityDays} per week
-  - YMCA Bootcamp: ${realWorldModules.fitness.ymcaBootcampCredit.perClassXP} XP per class (${realWorldModules.fitness.ymcaBootcampCredit.capWeek} XP weekly cap)
-
-BUSINESS MODULE:
-  - Active Nodes: ${realWorldModules.business.nodes.join(' • ')}
-  - Daily Rule: ${realWorldModules.business.dailyRule}
-
-LEGAL CASE MODULE:
-  - Core Story: ${realWorldModules.legalCase.coreStory}
-  - Evidence Types: ${realWorldModules.legalCase.evidenceTypes.join(' • ')}
-  - Court Dates: ${realWorldModules.legalCase.courtDates.length > 0 ? realWorldModules.legalCase.courtDates.join(', ') : 'None scheduled'}
-  - Next Steps: ${realWorldModules.legalCase.nextSteps.join(' • ')}
-
-RELATIONSHIPS MODULE:
-  - Rizz Aura: ${realWorldModules.relationships.rizzAuraEnabled ? 'ACTIVE' : 'INACTIVE'}
-  - Safety Rules: ${realWorldModules.relationships.safetyRules.join(' • ')}
-
-💡 SYSTEM NOTES:
-- BPM = ENERGETIC VIBRATION (not physical heart rate). Each transformation has a BPM range representing consciousness frequency.
-- Full Cowl = Black Heart Pulse Modulation - signature technique for precise BPM synchronization.
-- You have FULL ACCESS to all system information: every quest, task, skill, transformation, vault entry, roster member, council member, and all stats.
-- All tabs are interconnected: Character, Transformations, Energy, Quests, Skills, Councils, Inventory, Rituals, Vault, Tower, Rankings, Progress, Tasks, Store, and this chat.
-- Reference ANY information from the system in your responses. Nothing is hidden from you.
-`;
+SYSTEM RULES
+- BPM means energetic vibration, not physical heart rate.
+- Full Cowl = Black Heart Pulse Modulation.
+- Treat this as a compact operating digest, not an exhaustive dump.
+- Use memory, vault digest, threads, and prime summaries for continuity.
+- If exact details are missing, answer from the compact state and ask a focused follow-up.`;
   };
 
   const getMavisContext = () => {
-    const systemContext = buildFullSystemContext();
+    const systemContext = buildCompactSystemContext();
     const memoryContext = getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 15);
     const primeMemoryContext = primeMemory.getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 30);
     const agiModulesContext = buildModuleContext();
@@ -307,7 +310,7 @@ RELATIONSHIPS MODULE:
       setChatInitialized(true);
     };
 
-    loadChatHistory();
+    void loadChatHistory();
   }, [setMessages]);
 
   useEffect(() => {
@@ -351,7 +354,7 @@ RELATIONSHIPS MODULE:
       const systemContext = getMavisContext();
       const prompt = `${systemContext}\n\nUser started CBT exercise: ${exercise.name} - ${exercise.description}. Guide them through it step by step with detailed instructions and motivation.`;
       console.log('[MAVIS] Sending CBT exercise request...');
-      const result = await sendMessage({ text: prompt });
+      const result = sendMessage({ text: prompt });
       console.log('[MAVIS] CBT exercise sent, result:', result);
       
       addXP(exercise.xpReward);
@@ -366,7 +369,7 @@ RELATIONSHIPS MODULE:
     setManualStopped(true);
     try {
       if (typeof stop === 'function') {
-        stop();
+        void stop();
         console.log('[MAVIS-PRIME] SDK stop() called');
       }
     } catch (e) {
@@ -425,10 +428,10 @@ RELATIONSHIPS MODULE:
       const shouldRefreshContext = userMessageCount === 0 || userMessageCount % 3 === 0;
       const fullMessage = shouldRefreshContext
         ? `${systemContext}\n\nUser: ${userInput}`
-        : `[CONTEXT REMINDER: You have FULL access to all CodexOS data. Level ${gameState.stats.level} ${gameState.stats.rank} Rank. ${gameState.quests.filter(q => q.status === 'active').length} active quests. ${primeMemory.memoryEntries.length} memory entries. ${gameState.councils.length} council members. ${gameState.skillTrees.filter(s => s.unlocked).length} unlocked skills. ${gameState.vaultEntries.length} vault entries. ${gameState.tasks.filter(t => t.status === 'active').length} active tasks. ${gameState.inventoryV2.length} inventory items. ${gameState.energySystems.length} energy systems. ${gameState.transformations.length} forms. Backend sync: ${primeMemory.lastBackendSync ? 'active' : 'pending'}.]\n\nUser: ${userInput}`;
+        : `[COMPACT CONTEXT REMINDER: Level ${gameState.stats.level} ${gameState.stats.rank}. Form ${gameState.currentForm} at ${gameState.currentBPM} BPM. ${gameState.quests.filter(q => q.status === 'active').length} active quests. ${gameState.tasks.filter(t => t.status === 'active').length} active tasks. ${gameState.vaultEntries.length} vault entries summarized in system digest. ${primeMemory.memoryEntries.length} prime memory entries. ${conversationThreads.length} conversation threads. Backend sync: ${primeMemory.lastBackendSync ? 'active' : 'pending'}.]\n\nUser: ${userInput}`;
       
       console.log('[MAVIS-PRIME] Full message prepared, calling sendMessage...');
-      const result = await sendMessage({ text: fullMessage });
+      const result = sendMessage({ text: fullMessage });
       console.log('[MAVIS-PRIME] Message sent successfully, result:', result);
     } catch (err: any) {
       if (err?.name === 'AbortError' || manualStopped) {
@@ -445,7 +448,7 @@ RELATIONSHIPS MODULE:
   const handleQuickAction = async (prompt: string) => {
     try {
       console.log('[MAVIS] Quick action:', prompt);
-      const result = await sendMessage({ text: prompt });
+      const result = sendMessage({ text: prompt });
       console.log('[MAVIS] Quick action sent, result:', result);
     } catch (err) {
       console.error('[MAVIS] Error in quick action:', err);
@@ -530,7 +533,7 @@ RELATIONSHIPS MODULE:
         responseText = `🔄 ${command.replace('_', ' ')} INITIATED\n\nSynchronizing all CodexOS layers...\n\n✓ Identity Engine: ${gameState.identity.inscribedName}\n✓ Stats: Level ${gameState.stats.level} | ${gameState.stats.rank} Rank\n✓ Forms: ${gameState.transformations.length} unlocked\n✓ Energy Systems: ${gameState.energySystems.length} integrated\n✓ Quests: ${gameState.quests.length} tracked\n✓ Skills: ${gameState.skillTrees.filter(s => s.unlocked).length} active\n✓ Vault: ${gameState.vaultEntries.length} entries\n✓ Arc: ${gameState.arcStory}\n\n✅ SYNC COMPLETE. All systems coherent.`;
         break;
       case 'VAULT_SYNC':
-        await addVaultEntry(
+        addVaultEntry(
           'System Sync - ' + new Date().toLocaleDateString(),
           `Auto-generated vault entry from MAVIS-PRIME sync.\n\nLevel: ${gameState.stats.level}\nRank: ${gameState.stats.rank}\nCurrent Form: ${gameState.currentForm}\nActive Quests: ${gameState.quests.filter(q => q.status === 'active').length}`,
           'achievement',
@@ -548,7 +551,7 @@ RELATIONSHIPS MODULE:
         return;
       default:
         const fullMessage = originalMessage;
-        await sendMessage({ text: fullMessage });
+        sendMessage({ text: fullMessage });
         return;
     }
     
@@ -710,7 +713,7 @@ RELATIONSHIPS MODULE:
                   .map(p => p.text)
                   .join('\n');
                 if (fullText.trim()) {
-                  copyMessageText(msg.id, fullText);
+                  void copyMessageText(msg.id, fullText);
                 }
               }}
             >
@@ -742,7 +745,7 @@ RELATIONSHIPS MODULE:
                           .map(p => p.text)
                           .join('\n');
                         if (fullText.trim()) {
-                          copyMessageText(msg.id, fullText);
+                          void copyMessageText(msg.id, fullText);
                         }
                       }}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -888,7 +891,7 @@ RELATIONSHIPS MODULE:
                   key={titan.id}
                   style={styles.cbtExerciseCard}
                   onPress={() => {
-                    handleQuickAction(`Consult ${titan.label}: ${titan.domain}`);
+                    void handleQuickAction(`Consult ${titan.label}: ${titan.domain}`);
                     setSelectedMode('chat');
                   }}
                   activeOpacity={0.7}
@@ -923,7 +926,7 @@ RELATIONSHIPS MODULE:
                   key={action.id}
                   style={[styles.cbtExerciseCard, currentMode === action.id && { borderWidth: 2, borderColor: enryuMode ? '#DC143C' : '#9400D3' }]}
                   onPress={() => {
-                    switchMode(action.id);
+                    void switchMode(action.id);
                     setSelectedMode('chat');
                   }}
                   activeOpacity={0.7}
@@ -958,7 +961,7 @@ RELATIONSHIPS MODULE:
                   key={exercise.id}
                   style={styles.cbtExerciseCard}
                   onPress={() => {
-                    handleCBTExercise(exercise);
+                    void handleCBTExercise(exercise);
                     setSelectedMode('chat');
                   }}
                   activeOpacity={0.7}
@@ -1010,7 +1013,7 @@ RELATIONSHIPS MODULE:
                   const systemContext = getMavisContext();
                   const prompt = `${systemContext}\n\nUser completed the Ritual of Authorship. They've been granted 50 XP. Acknowledge this powerful act of creation with motivational feedback.`;
                   console.log('[MAVIS] Sending ritual completion...');
-                  const result = await sendMessage({ text: prompt });
+                  const result = sendMessage({ text: prompt });
                   console.log('[MAVIS] Ritual completed, result:', result);
                 } catch (err) {
                   console.error('[MAVIS] Error completing ritual:', err);
