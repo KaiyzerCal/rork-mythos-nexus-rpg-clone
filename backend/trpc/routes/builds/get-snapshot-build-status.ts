@@ -7,11 +7,12 @@ const inputSchema = z.object({
   snapshotId: z.string().optional(),
 }).optional();
 
-export default publicProcedure
+export const getSnapshotBuildStatusProcedure = publicProcedure
   .input(inputSchema)
   .query(async ({ input }) => {
     const requestedBuildId = input?.buildId ?? input?.snapshotId ?? null;
 
+    console.log('[BUILDS] router procedure registered: builds.getSnapshotBuildStatus');
     console.log('[BUILDS] getSnapshotBuildStatus called:', {
       requestedBuildId,
     });
@@ -51,3 +52,5 @@ export default publicProcedure
       };
     }
   });
+
+export default getSnapshotBuildStatusProcedure;
