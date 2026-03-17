@@ -1,9 +1,10 @@
 import { useGame } from '@/contexts/GameContext';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Modal, Alert, Keyboard } from 'react-native';
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Users, Crown, Lightbulb, Eye, MessageCircle, Send, ChevronLeft, Plus, Edit2, Trash2, X, RefreshCw, StopCircle } from 'lucide-react-native';
 import CopyButton from '@/components/CopyButton';
 import { useRorkAgent, generateObject } from '@rork-ai/toolkit-sdk';
+import SystemAPI from '@/utils/system-api';
 import { z } from 'zod';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ALL_COUNCIL_MEMBERS } from '@/constants/councils-v2';
@@ -22,6 +23,7 @@ export default function CouncilsScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingMember, setEditingMember] = useState<typeof councilMembers[0] | null>(null);
+  const [runtimeContextPrompt, setRuntimeContextPrompt] = useState<string>('');
   const [formData, setFormData] = useState({
     name: '',
     role: '',
@@ -33,149 +35,20 @@ export default function CouncilsScreen() {
   const classes = ['all', 'core', 'advisory', 'think-tank', 'shadows'];
 
   const getMemberContext = (member: typeof councilMembers[0]) => {
-    const { 
-      stats, identity, currentForm, currentBPM, energySystems, transformations, 
-      quests, vaultEntries, realWorldModules, councils, skillTrees, skillSubTrees,
-      dailyRituals, inventoryV2, roster, allies, currencies, currentFloor, gpr, pvpRating, arcStory,
-      tasks, skillProficiency
-    } = gameState;
-    
-    const activeQuests = quests.filter(q => q.status === 'active');
-    const completedQuests = quests.filter(q => q.status === 'completed');
-    const todayRituals = dailyRituals.filter(r => !r.completed);
-    const completedRituals = dailyRituals.filter(r => r.completed);
-    const unlockedSkills = skillTrees.filter(s => s.unlocked);
-    const mainCouncils = councils;
-    const topAllies = allies;
-    const allVault = vaultEntries;
-    const equippedItems = inventoryV2.filter(i => i.slot !== 'Storage');
-    const allRoster = roster;
-    const allTasks = tasks || [];
-    
-    const systemContext = `=== COMPREHENSIVE SYSTEM CONTEXT ===
+    const backendPrompt = runtimeContextPrompt || `SYSTEM STATE IS CONDENSED. Use backend retrieval for exact vault wording and for deep cross-tab details. Current operator: ${gameState.identity.inscribedName}. Level ${gameState.stats.level} ${gameState.stats.rank}. Active quests: ${gameState.quests.filter((quest) => quest.status === 'active').length}. Tasks: ${gameState.tasks.length}. Skills: ${gameState.skillTrees.filter((skill) => skill.unlocked).length}/${gameState.skillTrees.length}. Vault entries: ${gameState.vaultEntries.length}. Council members: ${gameState.councils.length}.`;
 
-📋 IDENTITY:
-- Name: ${identity.inscribedName}
-- Titles: ${identity.titles.join(' • ')}
-- Species: ${identity.speciesLineage[identity.speciesLineage.length - 1]}
-- Territory: ${identity.territory.class}
-- Tower Floors: ${identity.territory.towerFloorsInfluence}
-- Arc Story: ${arcStory || 'Unknown'}
-
-⚡ CURRENT STATUS:
-- Level ${stats.level} | Rank ${stats.rank} | XP: ${stats.xp}/${stats.xpToNextLevel}
-- Current Form: ${currentForm} (${currentBPM} BPM - energetic vibration, NOT heart rate)
-- Fatigue: ${stats.fatigue}/100 | Full Cowl Sync: ${stats.fullCowlSync}% | Codex Integrity: ${stats.codexIntegrity}%
-- Stats: STR ${stats.STR} • AGI ${stats.AGI} • VIT ${stats.VIT} • INT ${stats.INT} • WIS ${stats.WIS} • CHA ${stats.CHA} • LCK ${stats.LCK}
-- Tower Floor: ${currentFloor} | GPR: ${gpr} | PVP Rating: ${pvpRating}
-- Aura Power: ${stats.auraPower}
-
-💰 CURRENCIES:
-${currencies.map(c => `- ${c.icon} ${c.name}: ${c.amount}`).join('\n')}
-
-🌀 ENERGY SYSTEMS (${energySystems.length} total):
-${energySystems.map(e => `- ${e.type}: ${e.current}/${e.max} (${e.status}) - ${e.description}`).join('\n')}
-
-🔥 TRANSFORMATIONS (${transformations.length} forms unlocked):
-${transformations.slice(0, 8).map(t => {
-  return `- ${t.name} (${t.bpmRange} BPM) - ${t.category || 'Transformation'} - ${t.description || 'No description'}`;
-}).join('\n')}
-${transformations.length > 8 ? `... and ${transformations.length - 8} more forms` : ''}
-
-⚔️ SKILLS & ABILITIES (${unlockedSkills.length} unlocked):
-${unlockedSkills.slice(0, 10).map(s => {
-  const proficiencyKey = s.id;
-  const proficiency = skillProficiency?.[proficiencyKey] || 0;
-  return `- ${s.name} (${s.energyType}) [Prof: ${proficiency}] - ${s.description}`;
-}).join('\n')}
-${unlockedSkills.length > 10 ? `... and ${unlockedSkills.length - 10} more skills` : ''}
-
-🎯 ACTIVE QUESTS (${activeQuests.length}):
-${activeQuests.map(q => `- ${q.title}: ${q.progress ? `${q.progress.current}/${q.progress.target}` : 'ongoing'} (${q.xpReward} XP)${q.realWorldMapping ? ` - ${q.realWorldMapping}` : ''}`).join('\n')}
-${completedQuests.length > 0 ? `\nCompleted: ${completedQuests.length} quests` : ''}
-
-✅ TASKS & HABITS (${allTasks.length} total):
-${allTasks.slice(0, 8).map(t => {
-  const linkedSkill = t.linkedSkillId ? skillTrees.find(s => s.id === t.linkedSkillId) : null;
-  const skillInfo = linkedSkill ? ` [Linked: ${linkedSkill.name}${t.skillXpReward ? ` +${t.skillXpReward} Prof` : ''}]` : '';
-  return `- ${t.title} (${t.recurrence}) [${t.status}] Completed: ${t.completedCount} Streak: ${t.streak || 0}${skillInfo}`;
-}).join('\n')}
-${allTasks.length > 8 ? `... and ${allTasks.length - 8} more tasks` : ''}
-
-📅 TODAY'S RITUALS (${todayRituals.length} pending):
-${todayRituals.map(r => `- ${r.name} (${r.type}): +${r.xpReward} XP - ${r.description}`).join('\n')}
-${completedRituals.length > 0 ? `\nCompleted Today: ${completedRituals.length} rituals` : ''}
-
-👥 COUNCILS & ALLIES:
-Council Members (${councilMembers.length} total):
-${councilMembers.map(c => `- ${c.name} (${c.class}): ${c.role} - ${c.specialty || 'General'} - ${c.notes}`).join('\n')}
-
-Allies (${allies.length} total):
-${topAllies.map(a => `- ${a.name} (${a.relationship}) Lv.${a.level} - ${a.specialty} [Affinity: ${a.affinity}%]`).join('\n')}
-
-🎒 EQUIPPED ITEMS (${equippedItems.length}):
-${equippedItems.map(i => `- [${i.slot}] ${i.name} (${i.tier}) - ${i.description}`).join('\n')}
-
-📊 COMPLETE RANKINGS/ROSTER (${allRoster.length} tracked):
-${allRoster.map((r, idx) => `#${idx + 1} ${r.display} (${r.role}) ${r.rank} Lv.${r.level} | GPR: ${r.gpr} | PvP: ${(r.pvp/1000).toFixed(1)} | ${r.jjkGrade} ${r.opTier} | ${r.influence}${r.notes ? ` - ${r.notes}` : ''}`).join('\n')}
-
-🔒 COMPLETE VAULT CODEX (${allVault.length} entries):
-${allVault.map(v => {
-  const date = new Date(v.timestamp).toLocaleDateString();
-  return `- [${v.category.toUpperCase()}] ${v.title} (${v.importance.toUpperCase()}) - ${date}\n  Content: ${v.content}`;
-}).join('\n\n')}
-
-🏋️ REAL-WORLD MODULES:
-Fitness:
-  - Weekly Target: ${realWorldModules.fitness.habitTargets.weekSessions} sessions
-  - Recovery Days: ${realWorldModules.fitness.habitTargets.recoveryDays}
-  - YMCA Credit: ${realWorldModules.fitness.ymcaBootcampCredit.perClassXP} XP/class (${realWorldModules.fitness.ymcaBootcampCredit.capWeek} weekly cap)
-
-Business:
-  - Nodes: ${realWorldModules.business.nodes.join(' • ')}
-  - Daily Rule: ${realWorldModules.business.dailyRule}
-
-Legal Case:
-  - ${realWorldModules.legalCase.coreStory}
-  - Evidence: ${realWorldModules.legalCase.evidenceTypes.join(' • ')}
-  - Next Steps: ${realWorldModules.legalCase.nextSteps.join(' • ')}
-
-Relationships:
-  - Rizz Aura: ${realWorldModules.relationships.rizzAuraEnabled ? 'ACTIVE' : 'inactive'}
-  - Safety Rules: ${realWorldModules.relationships.safetyRules.join(' • ')}
-
-💡 KEY NOTES:
-- BPM = ENERGETIC VIBRATION (not physical heart rate). Each transformation has a BPM range representing consciousness frequency.
-- Full Cowl = Black Heart Pulse Modulation - signature technique for precise BPM synchronization.
-- All tabs are interconnected: Character, Transformations, Energy, Quests, Tasks, Skills, Councils, Inventory, Rituals, Vault, Tower, Rankings, Progress, and Mavis chat.
-- You have complete access to ALL vault entries with full content, ALL rankings/roster entries with full details, ALL tasks with skill linkage, and ALL other system data.
-
-=== YOUR ROLE & CHARACTER ===
-You are ${member.name}, a ${member.class} council member.
-Role: ${member.role}
-Specialty: ${member.specialty}
-Character Notes: ${member.notes}
-
-STAY IN CHARACTER: Embody ${member.name}'s personality, voice, and perspective authentically. Reference their specialty and approach. Be true to who they are - their mannerisms, speech patterns, values, and worldview. Don't be generic.
-
-You have complete access to ALL the data above. Use it to provide informed, strategic guidance. Reference specific stats, quests, skills, inventory items, vault entries, rankings, tasks, or any other data when relevant. Provide actionable advice based on the player's actual state and progress.
-
-CRITICAL: Keep ALL responses concise and condensed to EXACTLY 4 PARAGRAPHS MAXIMUM. Be direct, impactful, and efficient with words while staying authentic to your character. Make every word count. No fluff.`;
-    
-    return systemContext;
+    return `${backendPrompt}\n\n=== COUNCIL ROLE ===\nYou are ${member.name}, a ${member.class} council member.\nRole: ${member.role}\nSpecialty: ${member.specialty ?? 'General'}\nCharacter Notes: ${member.notes}\n\nStay in character. Be precise, strategic, and concise. Use backend-backed state across all tabs. If exact vault wording or fine-grained details matter, retrieve that section first. Keep replies to 4 paragraphs max.`;
   };
 
-  const [analyzingGrowth, setAnalyzingGrowth] = useState(false);
   const growthAnalysisRef = useRef(false);
 
-  const analyzeConversationGrowth = async (conversationHistory: string, memberName: string) => {
+  const analyzeConversationGrowth = useCallback(async (conversationHistory: string, memberName: string) => {
     if (growthAnalysisRef.current) {
       console.log(`[COUNCIL:${memberName}] Growth analysis already in progress, skipping`);
       return null;
     }
     try {
       growthAnalysisRef.current = true;
-      setAnalyzingGrowth(true);
       console.log(`[COUNCIL:${memberName}] Analyzing conversation for growth...`);
       
       const growthAnalysis = await generateObject({
@@ -219,9 +92,8 @@ Does this conversation meaningfully contribute to character growth?`,
       return null;
     } finally {
       growthAnalysisRef.current = false;
-      setAnalyzingGrowth(false);
     }
-  };
+  }, [growthAnalysisRef]);
 
   const { messages, sendMessage, setMessages, status, stop } = useRorkAgent({ tools: {} });
   const isLoading = status === 'streaming';
@@ -231,6 +103,18 @@ Does this conversation meaningfully contribute to character growth?`,
       scrollViewRef.current?.scrollToEnd({ animated: true });
     }
   }, [messages]);
+
+  useEffect(() => {
+    const loadRuntimeContext = async () => {
+      const runtimeContext = await SystemAPI.getAiRuntimeContext('all', false, 50);
+      const prompt = runtimeContext?.prompt;
+      if (prompt) {
+        setRuntimeContextPrompt(prompt);
+      }
+    };
+
+    void loadRuntimeContext();
+  }, []);
 
   useEffect(() => {
     if (isLoading) {
@@ -254,6 +138,7 @@ Does this conversation meaningfully contribute to character growth?`,
   };
 
   const isSendingRef = useRef(false);
+  const lastAnalyzedAssistantMessageIdRef = useRef<string | null>(null);
 
   const handleSend = async () => {
     if (!input.trim() || !activeConversation || isSendingRef.current) return;
@@ -269,7 +154,7 @@ Does this conversation meaningfully contribute to character growth?`,
     setUserInputMap((prev) => ({ ...prev, [tempId]: userInput }));
     
     try {
-      await sendMessage({ text: fullMessage });
+      sendMessage({ text: fullMessage });
     } catch (error) {
       console.error(`[COUNCIL] Error sending message:`, error);
     } finally {
@@ -285,36 +170,54 @@ Does this conversation meaningfully contribute to character growth?`,
       return updated;
     });
 
-    setTimeout(async () => {
+  };
+
+  useEffect(() => {
+    if (!activeConversation || status === 'streaming' || status === 'submitted' || messages.length === 0) {
+      return;
+    }
+
+    const lastAssistantMessage = [...messages].reverse().find((message) => {
+      if (message.role !== 'assistant') {
+        return false;
+      }
+      const text = message.parts
+        .filter((part): part is { type: 'text'; text: string } => part.type === 'text' && typeof (part as { text?: string }).text === 'string')
+        .map((part) => part.text)
+        .join(' ')
+        .trim();
+      return text.length > 0;
+    });
+
+    if (!lastAssistantMessage || lastAssistantMessage.id === lastAnalyzedAssistantMessageIdRef.current) {
+      return;
+    }
+
+    lastAnalyzedAssistantMessageIdRef.current = lastAssistantMessage.id;
+
+    const runGrowthAnalysis = async () => {
       const recentMessages = messages.slice(-6);
       const conversationHistory = recentMessages
-        .map((msg) => {
-          const role = msg.role === 'user' ? 'User' : activeConversation.name;
-          const text = msg.parts.filter((p) => p.type === 'text').map((p) => (p as any).text).join(' ');
+        .map((message) => {
+          const role = message.role === 'user' ? 'User' : activeConversation.name;
+          const text = message.parts
+            .filter((part): part is { type: 'text'; text: string } => part.type === 'text' && typeof (part as { text?: string }).text === 'string')
+            .map((part) => part.text)
+            .join(' ');
           return `${role}: ${text}`;
         })
         .join('\n\n');
-      
-      const analysis = await analyzeConversationGrowth(conversationHistory, activeConversation?.name || 'Unknown');
+
+      const analysis = await analyzeConversationGrowth(conversationHistory, activeConversation.name);
       if (analysis?.contributesToGrowth && analysis.xpAmount > 0) {
         const safeXP = Math.min(Math.max(0, Math.floor(analysis.xpAmount)), 100);
-        console.log(`[COUNCIL:${activeConversation.name}] Awarding ${safeXP} XP for ${analysis.growthType} growth`);
+        console.log(`[COUNCIL:${activeConversation.name}] Awarding ${safeXP} XP for ${analysis.growthType} growth after completed reply`);
         addXP(safeXP);
-        
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `xp-${Date.now()}`,
-            role: 'assistant' as const,
-            parts: [{
-              type: 'text' as const,
-              text: `[Council System: ${analysis.reason} You've been awarded ${safeXP} XP for this growth-oriented counsel.]`,
-            }],
-          },
-        ]);
       }
-    }, 2000);
-  };
+    };
+
+    void runGrowthAnalysis();
+  }, [activeConversation, addXP, analyzeConversationGrowth, messages, status]);
 
   const openAddModal = () => {
     setEditingMember(null);
@@ -544,7 +447,7 @@ Does this conversation meaningfully contribute to character growth?`,
           {isLoading ? (
             <TouchableOpacity
               style={styles.stopButton}
-              onPress={() => { if (typeof stop === 'function') stop(); }}
+              onPress={() => { if (typeof stop === 'function') void stop(); }}
               activeOpacity={0.7}
             >
               <StopCircle size={20} color="#FF6B35" />

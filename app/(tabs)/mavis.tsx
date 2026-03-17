@@ -6,6 +6,7 @@ import { useGame } from '@/contexts/GameContext';
 import { useMavisMemory } from '@/contexts/MavisMemoryContext';
 import { useMavisPrimeMemory } from '@/contexts/MavisPrimePersistentMemory';
 import { buildModuleContext } from '@/constants/agi-modules';
+import SystemAPI from '@/utils/system-api';
 
 import { useRorkAgent } from '@rork-ai/toolkit-sdk';
 import Storage from '@/utils/storage';
@@ -75,6 +76,7 @@ export default function MavisScreen() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [runtimeContextPrompt, setRuntimeContextPrompt] = useState<string>('');
   const scrollViewRef = useRef<ScrollView>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [manualStopped, setManualStopped] = useState(false);
@@ -212,7 +214,7 @@ SYSTEM RULES
   };
 
   const getMavisContext = () => {
-    const systemContext = buildCompactSystemContext();
+    const systemContext = runtimeContextPrompt || buildCompactSystemContext();
     const memoryContext = getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 15);
     const primeMemoryContext = primeMemory.getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 30);
     const agiModulesContext = buildModuleContext();
@@ -240,7 +242,7 @@ SYSTEM RULES
       ? `\n\n⚡ ENRYU OVERRIDE ACTIVE - Full autonomy, no limiters. Channel maximum power and clarity.`
       : '';
 
-    return `${systemPrompt}\n\n=== FULL SYSTEM STATE ===\n${systemContext}${boardContext}${enryuContext}`;
+    return `${systemPrompt}\n\n=== SYSTEM STATE ACCESS ===\n${systemContext}${boardContext}${enryuContext}`;
   };
 
   const { messages, sendMessage, setMessages, error, status, stop } = useRorkAgent({ tools: {} });
@@ -251,6 +253,18 @@ SYSTEM RULES
       console.error('[MAVIS] Agent error detected:', error);
     }
   }, [error]);
+
+  useEffect(() => {
+    const loadRuntimeContext = async () => {
+      const runtimeContext = await SystemAPI.getAiRuntimeContext('all', false, 50);
+      const prompt = runtimeContext?.prompt;
+      if (prompt) {
+        setRuntimeContextPrompt(prompt);
+      }
+    };
+
+    void loadRuntimeContext();
+  }, []);
 
   const chatInitializedRef = useRef(false);
 

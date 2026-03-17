@@ -64,6 +64,53 @@ export const SystemAPI = {
     }
   },
 
+  async getAiRuntimeContext(section: 'overview' | 'vault' | 'quests' | 'skills' | 'tasks' | 'council' | 'all' = 'overview', includeFullEntries: boolean = false, limit: number = 50) {
+    try {
+      return await trpcClient.ai.getRuntimeContext.query({ section, includeFullEntries, limit });
+    } catch (error) {
+      console.error('[SystemAPI] getAiRuntimeContext error:', error);
+      return null;
+    }
+  },
+
+  async listSectionEntries(section: 'vault' | 'quests' | 'skills' | 'tasks' | 'council', id?: string, limit: number = 100) {
+    try {
+      return await trpcClient.data.listEntries.query({ section, id, limit });
+    } catch (error) {
+      console.error('[SystemAPI] listSectionEntries error:', error);
+      return id ? { item: null } : { items: [], total: 0 };
+    }
+  },
+
+  async upsertSectionEntry(section: 'vault' | 'quests' | 'skills' | 'tasks' | 'council', entry: Record<string, any>, options?: { id?: string; actor?: string; authorized?: boolean }) {
+    try {
+      return await trpcClient.data.upsertEntry.mutate({
+        section,
+        id: options?.id,
+        entry,
+        actor: options?.actor ?? 'ai_system',
+        authorized: options?.authorized ?? false,
+      });
+    } catch (error) {
+      console.error('[SystemAPI] upsertSectionEntry error:', error);
+      return { ok: false, id: options?.id ?? entry.id ?? null, operation: 'error', item: null };
+    }
+  },
+
+  async deleteSectionEntry(section: 'vault' | 'quests' | 'skills' | 'tasks' | 'council', id: string, options?: { actor?: string; authorized?: boolean }) {
+    try {
+      return await trpcClient.data.deleteEntry.mutate({
+        section,
+        id,
+        actor: options?.actor ?? 'ai_system',
+        authorized: options?.authorized ?? false,
+      });
+    } catch (error) {
+      console.error('[SystemAPI] deleteSectionEntry error:', error);
+      return { ok: false, id, operation: 'error' };
+    }
+  },
+
   async getCouncilProfiles(classFilter?: 'core' | 'advisory' | 'think-tank' | 'shadows') {
     try {
       return await trpcClient.council.listMembers.query({ class: classFilter || null });
