@@ -432,7 +432,7 @@ SYSTEM RULES
       }
 
       const systemContext = getMavisContext();
-      const fullMessage = `${systemContext}\n\nLIVE WEB SEARCH RESULTS AVAILABLE. The user asked about time-sensitive information or the prior answer lacked current knowledge. Use the retrieved Google Custom Search results below as live context. If sources disagree, say so clearly. Reference the publication or source names naturally when relevant.\n\nSearch reason: ${reason}\nSearch query: ${searchResult.query}\n\nRetrieved results:\n${searchResult.summary}\n\nUser: ${userQuery}`;
+      const fullMessage = `${systemContext}\n\nLIVE WEB SEARCH RESULTS AVAILABLE. The user asked about time-sensitive information or the prior answer lacked current knowledge. Use the retrieved Tavily search results below as live context. If sources disagree, say so clearly. Reference the publication or source names naturally when relevant.\n\nSearch reason: ${reason}\nSearch query: ${searchResult.query}\n\nRetrieved results:\n${searchResult.summary}\n\nUser: ${userQuery}`;
 
       console.log('[MAVIS-PRIME] Sending web-augmented answer request');
       sendMessage({ text: fullMessage });

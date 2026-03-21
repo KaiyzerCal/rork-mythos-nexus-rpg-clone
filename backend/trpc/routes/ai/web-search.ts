@@ -6,89 +6,117 @@ const inputSchema = z.object({
   num: z.number().int().min(1).max(10).optional().default(5),
 });
 
-type GoogleCustomSearchItem = {
+type TavilySearchResult = {
   title?: string;
-  link?: string;
-  snippet?: string;
-  displayLink?: string;
+  url?: string;
+  content?: string;
+  score?: number;
+};
+
+type TavilySearchResponse = {
+  results?: TavilySearchResult[];
+  answer?: string;
+  query?: string;
+  response_time?: number;
 };
 
 export default publicProcedure
   .input(inputSchema)
   .query(async ({ input }) => {
-    const apiKey = process.env.EXPO_PUBLIC_GOOGLE_SEARCH_KEY;
-    const searchEngineId = process.env.EXPO_PUBLIC_GOOGLE_SEARCH_CX;
+    const apiKey = process.env.TAVILY_API_KEY;
 
-    console.log('[AI Web Search] Starting search:', {
+    console.log('[AI Web Search] Starting Tavily search:', {
       query: input.query,
       num: input.num,
       hasApiKey: Boolean(apiKey),
-      hasSearchEngineId: Boolean(searchEngineId),
     });
 
-    if (!apiKey || !searchEngineId) {
+    if (!apiKey) {
       return {
         ok: false,
         query: input.query,
         results: [],
         summary: '',
-        error: 'Missing EXPO_PUBLIC_GOOGLE_SEARCH_KEY or EXPO_PUBLIC_GOOGLE_SEARCH_CX',
+        error: 'Missing TAVILY_API_KEY',
       };
     }
 
-    const url = new URL('https://www.googleapis.com/customsearch/v1');
-    url.searchParams.set('key', apiKey);
-    url.searchParams.set('cx', searchEngineId);
-    url.searchParams.set('q', input.query);
-    url.searchParams.set('num', String(input.num));
-    url.searchParams.set('safe', 'active');
-
     try {
-      const response = await fetch(url.toString());
+      const response = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          api_key: apiKey,
+          query: input.query,
+          max_results: input.num,
+          search_depth: 'basic',
+          include_answer: true,
+          include_raw_content: false,
+          topic: 'general',
+        }),
+      });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('[AI Web Search] Google API error:', response.status, errorText);
+        console.error('[AI Web Search] Tavily API error:', response.status, errorText);
         return {
           ok: false,
           query: input.query,
           results: [],
           summary: '',
-          error: `Google search failed with status ${response.status}`,
+          error: `Tavily search failed with status ${response.status}`,
         };
       }
 
-      const data = (await response.json()) as { items?: GoogleCustomSearchItem[] };
-      const results = Array.isArray(data.items)
-        ? data.items
-            .filter((item) => item.link && (item.title || item.snippet))
-            .map((item, index) => ({
-              id: `google-result-${index + 1}`,
-              title: item.title ?? 'Untitled',
-              link: item.link ?? '',
-              snippet: item.snippet ?? '',
-              source: item.displayLink ?? 'Google Search',
-            }))
+      const data = (await response.json()) as TavilySearchResponse;
+      const results = Array.isArray(data.results)
+        ? data.results
+            .filter((item) => item.url && (item.title || item.content))
+            .map((item, index) => {
+              let source = 'Web';
+
+              try {
+                source = new URL(item.url ?? '').hostname.replace(/^www\./, '') || 'Web';
+              } catch (error) {
+                console.log('[AI Web Search] Failed to parse Tavily result URL:', error);
+              }
+
+              return {
+                id: `tavily-result-${index + 1}`,
+                title: item.title ?? 'Untitled',
+                link: item.url ?? '',
+                snippet: item.content ?? '',
+                source,
+                score: item.score ?? null,
+              };
+            })
         : [];
 
-      const summary = results
-        .map((item, index) => `${index + 1}. ${item.title} (${item.source})\n${item.snippet}\nURL: ${item.link}`)
-        .join('\n\n');
+      const answerBlock = typeof data.answer === 'string' && data.answer.trim().length > 0
+        ? `Tavily answer: ${data.answer.trim()}\n\n`
+        : '';
 
-      console.log('[AI Web Search] Search complete:', {
+      const summary = `${answerBlock}${results
+        .map((item, index) => `${index + 1}. ${item.title} (${item.source})\n${item.snippet}\nURL: ${item.link}`)
+        .join('\n\n')}`.trim();
+
+      console.log('[AI Web Search] Tavily search complete:', {
         query: input.query,
         resultCount: results.length,
+        hasAnswer: Boolean(data.answer),
       });
 
       return {
         ok: true,
-        query: input.query,
+        query: data.query ?? input.query,
         results,
         summary,
         error: null,
       };
     } catch (error) {
-      console.error('[AI Web Search] Unexpected search error:', error);
+      console.error('[AI Web Search] Unexpected Tavily search error:', error);
       return {
         ok: false,
         query: input.query,
