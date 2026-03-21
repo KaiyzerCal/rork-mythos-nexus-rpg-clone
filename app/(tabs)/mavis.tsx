@@ -61,6 +61,20 @@ const CBT_EXERCISES = [
 const MAVIS_CHAT_HISTORY_KEY = 'mavis_chat_history';
 const MAVIS_MODE_KEY = 'mavis_current_mode';
 const MAVIS_BOARD_STATE_KEY = 'mavis_board_active';
+const CURRENT_EVENTS_PATTERN = /\b(latest|breaking|news|headline|headlines|current events|current event|today|yesterday|this week|this month|recent|recently|now|currently|live update|election|war|market|stocks|bitcoin|crypto|weather|sports score|score|2025|2026)\b/i;
+const UNKNOWN_ANSWER_PATTERN = /\b(i don't know|i do not know|i'm not sure|i am not sure|i don't have access to real-time|i do not have access to real-time|i can't browse|i cannot browse|no real-time information|no realtime information|don't have current information|do not have current information)\b/i;
+
+function extractMessageText(message: { parts?: Array<{ type?: string; text?: string }> } | null | undefined): string {
+  if (!message?.parts || !Array.isArray(message.parts)) {
+    return '';
+  }
+
+  return message.parts
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join(' ')
+    .trim();
+}
 
 export default function MavisScreen() {
   const insets = useSafeAreaInsets();
@@ -80,8 +94,11 @@ export default function MavisScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [manualStopped, setManualStopped] = useState(false);
+  const lastUserInputRef = useRef('');
+  const lastSearchQueryRef = useRef<string | null>(null);
+  const webSearchInFlightRef = useRef(false);
 
-  const buildVaultDigest = () => {
+  const buildVaultDigest = useCallback(() => {
     const { vaultEntries } = gameState;
 
     if (vaultEntries.length === 0) {
@@ -115,9 +132,9 @@ export default function MavisScreen() {
     }, {});
 
     return `VAULT (${vaultEntries.length} total)\nCategory counts: ${Object.entries(categoryCounts).map(([key, value]) => `${key}:${value}`).join(' • ')}\nImportance counts: ${Object.entries(importanceCounts).map(([key, value]) => `${key}:${value}`).join(' • ')}\nRecent high-signal entries:\n${recentHighSignal}`;
-  };
+  }, [gameState]);
 
-  const buildCompactSystemContext = () => {
+  const buildCompactSystemContext = useCallback(() => {
     const {
       stats, identity, currentForm, currentBPM, energySystems, transformations,
       quests, realWorldModules, councils, skillTrees,
@@ -211,9 +228,9 @@ SYSTEM RULES
 - Treat this as a compact operating digest, not an exhaustive dump.
 - Use memory, vault digest, threads, and prime summaries for continuity.
 - If exact details are missing, answer from the compact state and ask a focused follow-up.`;
-  };
+  }, [buildVaultDigest, gameState]);
 
-  const getMavisContext = () => {
+  const getMavisContext = useCallback(() => {
     const systemContext = runtimeContextPrompt || buildCompactSystemContext();
     const memoryContext = getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 15);
     const primeMemoryContext = primeMemory.getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 30);
@@ -243,7 +260,7 @@ SYSTEM RULES
       : '';
 
     return `${systemPrompt}\n\n=== SYSTEM STATE ACCESS ===\n${systemContext}${boardContext}${enryuContext}`;
-  };
+  }, [boardActive, buildCompactSystemContext, conversationThreads, currentMode, enryuMode, getMemoryContext, primeMemory, runtimeContextPrompt]);
 
   const { messages, sendMessage, setMessages, error, status, stop } = useRorkAgent({ tools: {} });
   const isStreaming = (status === 'streaming' || status === 'submitted') && !manualStopped;
@@ -396,6 +413,38 @@ SYSTEM RULES
     }
   }, [stop]);
 
+  const sendWithWebSearch = useCallback(async (userQuery: string, reason: 'proactive' | 'fallback') => {
+    if (webSearchInFlightRef.current) {
+      console.log('[MAVIS-PRIME] Web search already in flight, skipping duplicate request');
+      return false;
+    }
+
+    webSearchInFlightRef.current = true;
+    lastSearchQueryRef.current = userQuery;
+
+    try {
+      console.log('[MAVIS-PRIME] Running web search:', { userQuery, reason });
+      const searchResult = await SystemAPI.searchWeb(userQuery, 5);
+
+      if (!searchResult?.ok || !searchResult.summary) {
+        console.log('[MAVIS-PRIME] Web search returned no usable results:', searchResult?.error);
+        return false;
+      }
+
+      const systemContext = getMavisContext();
+      const fullMessage = `${systemContext}\n\nLIVE WEB SEARCH RESULTS AVAILABLE. The user asked about time-sensitive information or the prior answer lacked current knowledge. Use the retrieved Google Custom Search results below as live context. If sources disagree, say so clearly. Reference the publication or source names naturally when relevant.\n\nSearch reason: ${reason}\nSearch query: ${searchResult.query}\n\nRetrieved results:\n${searchResult.summary}\n\nUser: ${userQuery}`;
+
+      console.log('[MAVIS-PRIME] Sending web-augmented answer request');
+      sendMessage({ text: fullMessage });
+      return true;
+    } catch (error) {
+      console.error('[MAVIS-PRIME] Web search send failed:', error);
+      return false;
+    } finally {
+      webSearchInFlightRef.current = false;
+    }
+  }, [getMavisContext, sendMessage]);
+
   const handleSend = async () => {
     if (!input.trim()) return;
 
@@ -410,6 +459,7 @@ SYSTEM RULES
 
     try {
       console.log('[MAVIS-PRIME] Sending message:', userInput);
+      lastUserInputRef.current = userInput;
       
       await autoSaveFromConversation(userInput, 'user');
       
@@ -435,6 +485,14 @@ SYSTEM RULES
         return;
       }
       
+      if (CURRENT_EVENTS_PATTERN.test(userInput)) {
+        console.log('[MAVIS-PRIME] Current-events query detected, using web search first');
+        const didUseWebSearch = await sendWithWebSearch(userInput, 'proactive');
+        if (didUseWebSearch) {
+          return;
+        }
+      }
+
       const systemContext = getMavisContext();
       console.log('[MAVIS-PRIME] System context length:', systemContext.length);
       
@@ -458,6 +516,32 @@ SYSTEM RULES
       abortControllerRef.current = null;
     }
   };
+
+  useEffect(() => {
+    if (status === 'streaming' || status === 'submitted' || messages.length === 0) {
+      return;
+    }
+
+    const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
+    const assistantText = extractMessageText(lastAssistantMessage);
+    const lastUserInput = lastUserInputRef.current.trim();
+
+    if (!assistantText || !lastUserInput) {
+      return;
+    }
+
+    if (!UNKNOWN_ANSWER_PATTERN.test(assistantText)) {
+      return;
+    }
+
+    if (lastSearchQueryRef.current === lastUserInput) {
+      console.log('[MAVIS-PRIME] Unknown-answer fallback already used for this query');
+      return;
+    }
+
+    console.log('[MAVIS-PRIME] Unknown-answer fallback detected, triggering web search');
+    void sendWithWebSearch(lastUserInput, 'fallback');
+  }, [messages, sendWithWebSearch, status]);
 
   const handleQuickAction = async (prompt: string) => {
     try {

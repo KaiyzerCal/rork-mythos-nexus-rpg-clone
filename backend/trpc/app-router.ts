@@ -12,6 +12,7 @@ import memoryUpsertFact from "./routes/memory/upsert-fact";
 import councilListMembers from "./routes/council/list-members";
 import councilUpsertMember from "./routes/council/upsert-member";
 import aiGetRuntimeContext from "./routes/ai/get-runtime-context";
+import aiWebSearch from "./routes/ai/web-search";
 import dataListEntries from "./routes/data/list-entries";
 import dataUpsertEntry from "./routes/data/upsert-entry";
 import dataDeleteEntry from "./routes/data/delete-entry";
@@ -45,6 +46,7 @@ export const appRouter = createTRPCRouter({
   }),
   ai: createTRPCRouter({
     getRuntimeContext: aiGetRuntimeContext,
+    webSearch: aiWebSearch,
   }),
   data: createTRPCRouter({
     listEntries: dataListEntries,

@@ -73,6 +73,22 @@ export const SystemAPI = {
     }
   },
 
+  async searchWeb(query: string, num: number = 5) {
+    console.log('[SystemAPI] Running web search:', { query, num });
+    try {
+      return await trpcClient.ai.webSearch.query({ query, num });
+    } catch (error) {
+      console.error('[SystemAPI] searchWeb error:', error);
+      return {
+        ok: false,
+        query,
+        results: [],
+        summary: '',
+        error: 'Web search request failed',
+      };
+    }
+  },
+
   async listSectionEntries(section: 'vault' | 'quests' | 'skills' | 'tasks' | 'council', id?: string, limit: number = 100) {
     try {
       return await trpcClient.data.listEntries.query({ section, id, limit });
