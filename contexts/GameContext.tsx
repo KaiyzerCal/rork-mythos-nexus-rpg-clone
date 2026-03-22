@@ -1,6 +1,6 @@
 import createContextHook from '@nkzw/create-context-hook';
 import Storage from '@/utils/storage';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { trpcClient } from '@/lib/trpc';
 import type {
   EnergyLevel,
@@ -292,12 +292,12 @@ export const [GameProvider, useGame] = createContextHook(() => {
     backendSyncTimerRef.current = setTimeout(() => {
       if (pendingSyncRef.current) {
         pendingSyncRef.current = false;
-        syncGameStateToBackend(gameStateRef.current);
+        void syncGameStateToBackend(gameStateRef.current);
       }
     }, BACKEND_SYNC_DEBOUNCE_MS);
   }, [syncGameStateToBackend]);
 
-  const loadGameStateFromBackend = useCallback(async (): Promise<any | null> => {
+  const loadGameStateFromBackend = useCallback(async (): Promise<GameState | null> => {
     try {
       console.log('[GAME_CONTEXT] Attempting to load game state from backend...');
       const snapshot = await trpcClient.system.getSystemSnapshot.query({
@@ -412,8 +412,8 @@ export const [GameProvider, useGame] = createContextHook(() => {
       }
     };
 
-    loadGameState();
-  }, []);
+    void loadGameState();
+  }, [loadGameStateFromBackend, scheduleDebouncedBackendSync]);
 
   const saveGameState = useCallback(async (newState: GameState) => {
     setGameState(newState);
@@ -458,7 +458,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         },
       };
 
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -474,7 +474,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         currentForm: transformation.name,
         currentBPM: newBPM,
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -495,7 +495,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         currentBPM: bpm,
         bpmSessions: [session, ...prev.bpmSessions].slice(0, 100),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -569,7 +569,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         inventory: updatedInventory,
         skillProficiency: updatedSkillProficiency,
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       
       if (quest.xpReward > 0) {
         setTimeout(() => addXP(quest.xpReward), 100);
@@ -586,7 +586,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
           : q
       );
       const newState = { ...prev, quests: updatedQuests };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -597,7 +597,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         quests: prev.quests.map((q) => (q.id === questId ? { ...q, ...updates } : q)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -606,7 +606,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const newQuest: Quest = { ...quest, id: Date.now().toString() };
       const newState = { ...prev, quests: [...prev.quests, newQuest] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -614,7 +614,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteQuest = useCallback((questId: string) => {
     setGameState((prev) => {
       const newState = { ...prev, quests: prev.quests.filter((q) => q.id !== questId) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -625,7 +625,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         e.type === energyType ? { ...e, current: Math.max(0, Math.min(current, e.max)) } : e
       );
       const newState = { ...prev, energySystems: updatedEnergy };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -636,7 +636,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         stats: { ...prev.stats, [statName]: value },
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -647,7 +647,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         vaultEntries: prev.vaultEntries.map((v) => (v.id === id ? { ...v, ...updates } : v)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -655,7 +655,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteVaultEntry = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, vaultEntries: prev.vaultEntries.filter((v) => v.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -666,7 +666,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         inventoryV2: prev.inventoryV2.map((i) => (i.id === id ? { ...i, ...updates } : i)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -674,7 +674,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const updateArcStory = useCallback((arcStory: string) => {
     setGameState((prev) => {
       const newState = { ...prev, arcStory };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -685,7 +685,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         identity: { ...prev.identity, ...updates },
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -696,7 +696,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         stats: { ...prev.stats, ...updates },
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -713,7 +713,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         attachments: attachments || undefined,
       };
       const newState = { ...prev, vaultEntries: [entry, ...prev.vaultEntries] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -721,7 +721,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const setFloor = useCallback((floor: number) => {
     setGameState((prev) => {
       const newState = { ...prev, currentFloor: floor };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -735,7 +735,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
       const newState = { ...prev, inventoryV2: [...prev.inventoryV2, newItem] };
       console.log('[GAME_CONTEXT] New inventory length:', newState.inventoryV2.length);
       console.log('[GAME_CONTEXT] Saving game state...');
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -743,7 +743,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteInventoryItem = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, inventoryV2: prev.inventoryV2.filter((i) => i.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -752,7 +752,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const newEntry: RosterEntry = { ...entry, id: Date.now().toString() };
       const newState = { ...prev, roster: [...prev.roster, newEntry] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -763,7 +763,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         roster: prev.roster.map((r) => (r.id === id ? { ...r, ...updates } : r)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -771,7 +771,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteRosterEntry = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, roster: prev.roster.filter((r) => r.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -784,7 +784,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         max: energy.max ?? 100,
       };
       const newState = { ...prev, energySystems: [...prev.energySystems, newEnergy] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -795,7 +795,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         energySystems: prev.energySystems.map((e) => (e.type === type ? { ...e, ...updates } : e)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -803,7 +803,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteEnergySystem = useCallback((type: string) => {
     setGameState((prev) => {
       const newState = { ...prev, energySystems: prev.energySystems.filter((e) => e.type !== type) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -812,7 +812,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const newAlly: AllyData = { ...ally, id: Date.now().toString() };
       const newState = { ...prev, allies: [...prev.allies, newAlly] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -823,7 +823,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         allies: prev.allies.map((a) => (a.id === id ? { ...a, ...updates } : a)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -831,7 +831,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteAlly = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, allies: prev.allies.filter((a) => a.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -840,7 +840,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const newRitual: DailyRitual = { ...ritual, id: Date.now().toString() };
       const newState = { ...prev, dailyRituals: [...prev.dailyRituals, newRitual] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -851,7 +851,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         dailyRituals: prev.dailyRituals.map((r) => (r.id === id ? { ...r, ...updates } : r)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -859,7 +859,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteRitual = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, dailyRituals: prev.dailyRituals.filter((r) => r.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -870,7 +870,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const newState = { ...prev, councils: [...prev.councils, newMember] };
       console.log('[COUNCIL] New councils count:', newState.councils.length);
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -881,7 +881,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         councils: prev.councils.map((m) => (m.id === id ? { ...m, ...updates } : m)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -889,7 +889,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteCouncilMember = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, councils: prev.councils.filter((m) => m.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -897,7 +897,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const addTransformation = useCallback((transformation: TransformationData) => {
     setGameState((prev) => {
       const newState = { ...prev, transformations: [...prev.transformations, transformation] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -908,7 +908,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         transformations: prev.transformations.map((t) => (t.id === id ? { ...t, ...updates } : t)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -916,7 +916,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteTransformation = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, transformations: prev.transformations.filter((t) => t.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
     console.log('Deleted transformation:', id);
@@ -935,7 +935,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         dailyRituals: updatedRituals,
       };
-      saveGameState(newState);
+      void saveGameState(newState);
 
       if (ritual.xpReward > 0) {
         setTimeout(() => addXP(ritual.xpReward), 100);
@@ -967,7 +967,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         currencies: updatedCurrencies,
       };
 
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -976,7 +976,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const newSkill: SkillTreeNode = { ...skill, id: Date.now().toString() };
       const newState = { ...prev, skillTrees: [...prev.skillTrees, newSkill] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -986,7 +986,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
     setGameState((prev) => {
       const updatedSubTrees = { ...prev.skillSubTrees, [parentSkillId]: [...(prev.skillSubTrees?.[parentSkillId] || []), newSkill] };
       const newState = { ...prev, skillSubTrees: updatedSubTrees };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
     console.log('Added sub-skill:', newSkill.name, 'to parent:', parentSkillId);
@@ -998,7 +998,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         skillTrees: prev.skillTrees.map((s) => (s.id === id ? { ...s, ...updates } : s)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -1006,7 +1006,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteSkill = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, skillTrees: prev.skillTrees.filter((s) => s.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -1018,7 +1018,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
       const updatedSubTree = parentTree.map((s) => (s.id === subSkillId ? { ...s, ...updates } : s));
       const updatedSubTrees = { ...prev.skillSubTrees, [parentSkillId]: updatedSubTree };
       const newState = { ...prev, skillSubTrees: updatedSubTrees };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
     console.log('Updated sub-skill:', subSkillId, 'in parent:', parentSkillId);
@@ -1031,7 +1031,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
       const updatedSubTree = parentTree.filter((s) => s.id !== subSkillId);
       const updatedSubTrees = { ...prev.skillSubTrees, [parentSkillId]: updatedSubTree };
       const newState = { ...prev, skillSubTrees: updatedSubTrees };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
     console.log('Deleted sub-skill:', subSkillId, 'from parent:', parentSkillId);
@@ -1045,7 +1045,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         createdAt: Date.now(),
       };
       const newState = { ...prev, tasks: [...prev.tasks, newTask] };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -1056,7 +1056,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         ...prev,
         tasks: prev.tasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
       };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -1064,7 +1064,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const deleteTask = useCallback((id: string) => {
     setGameState((prev) => {
       const newState = { ...prev, tasks: prev.tasks.filter((t) => t.id !== id) };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -1072,7 +1072,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
   const saveStoreItems = useCallback((items: StoreItem[]) => {
     setGameState((prev) => {
       const newState = { ...prev, storeItems: items };
-      saveGameState(newState);
+      void saveGameState(newState);
       return newState;
     });
   }, [saveGameState]);
@@ -1127,7 +1127,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         skillProficiency: updatedProficiency,
       };
 
-      saveGameState(newState);
+      void saveGameState(newState);
 
       if (task.xpReward > 0) {
         setTimeout(() => addXP(task.xpReward), 100);
@@ -1149,7 +1149,7 @@ export const [GameProvider, useGame] = createContextHook(() => {
         xpGained: 50,
       };
       const newState = { ...prev, journalEntries: [entry, ...prev.journalEntries] };
-      saveGameState(newState);
+      void saveGameState(newState);
       setTimeout(() => addXP(50), 100);
       return newState;
     });
@@ -1160,7 +1160,20 @@ export const [GameProvider, useGame] = createContextHook(() => {
     await syncGameStateToBackend(gameStateRef.current);
   }, [syncGameStateToBackend]);
 
-  return {
+  const refreshFromBackend = useCallback(async () => {
+    console.log('[GAME_CONTEXT] Refresh from backend requested');
+    const backendState = await loadGameStateFromBackend();
+    if (!backendState) {
+      return false;
+    }
+
+    const merged = mergeGameState({ ...gameStateRef.current, ...backendState });
+    setGameState(merged);
+    await Storage.setItem(STORAGE_KEY, JSON.stringify(merged));
+    return true;
+  }, [loadGameStateFromBackend]);
+
+  return useMemo(() => ({
     gameState,
     isLoading,
     lastBackendSync,
@@ -1220,5 +1233,67 @@ export const [GameProvider, useGame] = createContextHook(() => {
     saveStoreItems,
     addJournalEntry,
     forceBackendSync,
-  };
+    refreshFromBackend,
+  }), [
+    gameState,
+    isLoading,
+    lastBackendSync,
+    backendSyncStatus,
+    councilMembers,
+    skillSubTrees,
+    unlockSkill,
+    addSkill,
+    updateSkill,
+    deleteSkill,
+    addSubSkill,
+    updateSubSkill,
+    deleteSubSkill,
+    addXP,
+    setCurrentForm,
+    setBPM,
+    completeQuest,
+    updateQuestProgress,
+    updateQuest,
+    updateEnergyLevel,
+    updateStat,
+    addQuest,
+    deleteQuest,
+    addVaultEntry,
+    setFloor,
+    addInventoryItem,
+    deleteInventoryItem,
+    addRosterEntry,
+    updateRosterEntry,
+    deleteRosterEntry,
+    addEnergySystem,
+    updateEnergySystem,
+    deleteEnergySystem,
+    addAlly,
+    updateAlly,
+    deleteAlly,
+    addRitual,
+    updateRitual,
+    deleteRitual,
+    completeRitual,
+    addCouncilMember,
+    updateCouncilMember,
+    deleteCouncilMember,
+    addTransformation,
+    updateTransformation,
+    deleteTransformation,
+    updateVaultEntry,
+    deleteVaultEntry,
+    updateInventoryItem,
+    updateArcStory,
+    updateIdentity,
+    updateAllStats,
+    addTask,
+    updateTask,
+    deleteTask,
+    completeTask,
+    saveStoreItems,
+    addJournalEntry,
+    forceBackendSync,
+    refreshFromBackend,
+  ]);
 });

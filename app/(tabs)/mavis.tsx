@@ -8,7 +8,8 @@ import { useMavisPrimeMemory } from '@/contexts/MavisPrimePersistentMemory';
 import { buildModuleContext } from '@/constants/agi-modules';
 import SystemAPI from '@/utils/system-api';
 
-import { useRorkAgent } from '@rork-ai/toolkit-sdk';
+import { createRorkTool, useRorkAgent } from '@rork-ai/toolkit-sdk';
+import { z } from 'zod';
 import Storage from '@/utils/storage';
 import { 
   MAVIS_MODES, 
@@ -64,6 +65,20 @@ const MAVIS_BOARD_STATE_KEY = 'mavis_board_active';
 const CURRENT_EVENTS_PATTERN = /\b(latest|breaking|news|headline|headlines|current events|current event|today|yesterday|this week|this month|recent|recently|now|currently|live update|election|war|market|stocks|bitcoin|crypto|weather|sports score|score|2025|2026)\b/i;
 const UNKNOWN_ANSWER_PATTERN = /\b(i don't know|i do not know|i'm not sure|i am not sure|i don't have access to real-time|i do not have access to real-time|i can't browse|i cannot browse|no real-time information|no realtime information|don't have current information|do not have current information)\b/i;
 
+type CrudSection = 'vault' | 'quests' | 'skills' | 'tasks' | 'council';
+type CrudAction = 'create' | 'update' | 'delete';
+
+type CrudProposal = {
+  kind: 'crud_proposal';
+  proposalId: string;
+  section: CrudSection;
+  action: CrudAction;
+  title: string;
+  summary: string;
+  entryId?: string;
+  entry?: Record<string, unknown>;
+};
+
 function extractMessageText(message: { parts?: Array<{ type?: string; text?: string }> } | null | undefined): string {
   if (!message?.parts || !Array.isArray(message.parts)) {
     return '';
@@ -76,9 +91,36 @@ function extractMessageText(message: { parts?: Array<{ type?: string; text?: str
     .trim();
 }
 
+function getDisplayMessageText(role: string, text: string): string {
+  if (role !== 'user') {
+    return text;
+  }
+
+  const userMarker = '\n\nUser: ';
+  const markerIndex = text.lastIndexOf(userMarker);
+  if (markerIndex >= 0) {
+    return text.slice(markerIndex + userMarker.length).trim();
+  }
+
+  if (text.includes('LIVE WEB SEARCH RESULTS AVAILABLE.')) {
+    const queryMarker = 'User: ';
+    const queryIndex = text.lastIndexOf(queryMarker);
+    if (queryIndex >= 0) {
+      return text.slice(queryIndex + queryMarker.length).trim();
+    }
+  }
+
+  return text;
+}
+
 export default function MavisScreen() {
   const insets = useSafeAreaInsets();
-  const { gameState, addXP, addVaultEntry } = useGame();
+  const {
+    gameState,
+    addXP,
+    addVaultEntry,
+    refreshFromBackend,
+  } = useGame();
   const { getMemoryContext, autoSaveFromConversation, conversationThreads, memoryItems } = useMavisMemory();
   const primeMemory = useMavisPrimeMemory();
   const [input, setInput] = useState('');
@@ -134,7 +176,7 @@ export default function MavisScreen() {
     return `VAULT (${vaultEntries.length} total)\nCategory counts: ${Object.entries(categoryCounts).map(([key, value]) => `${key}:${value}`).join(' • ')}\nImportance counts: ${Object.entries(importanceCounts).map(([key, value]) => `${key}:${value}`).join(' • ')}\nRecent high-signal entries:\n${recentHighSignal}`;
   }, [gameState]);
 
-  const buildCompactSystemContext = useCallback(() => {
+  const _buildCompactSystemContext = useCallback(() => {
     const {
       stats, identity, currentForm, currentBPM, energySystems, transformations,
       quests, realWorldModules, councils, skillTrees,
@@ -231,7 +273,12 @@ SYSTEM RULES
   }, [buildVaultDigest, gameState]);
 
   const getMavisContext = useCallback(() => {
-    const systemContext = runtimeContextPrompt || buildCompactSystemContext();
+    const fallbackContext = [
+      `CONDENSED BACKEND STATE:\nOperator ${gameState.identity.inscribedName} • L${gameState.stats.level} ${gameState.stats.rank} • Form ${gameState.currentForm}`,
+      `Counts q:${gameState.quests.filter((quest) => quest.status === 'active').length}/${gameState.quests.length} t:${gameState.tasks.length} s:${gameState.skillTrees.filter((skill) => skill.unlocked).length}/${gameState.skillTrees.length} v:${gameState.vaultEntries.length} c:${gameState.councils.length}`,
+      'Read overview first. Retrieve exact sections only when needed. Use full entries only for exact wording or edits. Require explicit user approval before create, update, or delete.',
+    ].join('\n');
+    const systemContext = runtimeContextPrompt || fallbackContext;
     const memoryContext = getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 15);
     const primeMemoryContext = primeMemory.getMemoryContext(['court', 'business', 'dynasty', 'health', 'family'], 30);
     const agiModulesContext = buildModuleContext();
@@ -260,9 +307,82 @@ SYSTEM RULES
       : '';
 
     return `${systemPrompt}\n\n=== SYSTEM STATE ACCESS ===\n${systemContext}${boardContext}${enryuContext}`;
-  }, [boardActive, buildCompactSystemContext, conversationThreads, currentMode, enryuMode, getMemoryContext, primeMemory, runtimeContextPrompt]);
+  }, [boardActive, conversationThreads, currentMode, enryuMode, gameState, getMemoryContext, primeMemory, runtimeContextPrompt]);
 
-  const { messages, sendMessage, setMessages, error, status, stop } = useRorkAgent({ tools: {} });
+  const executeCrudProposal = useCallback(async (proposal: CrudProposal) => {
+    console.log('[MAVIS-PRIME] Executing approved CRUD proposal:', proposal);
+
+    if (proposal.action === 'delete') {
+      const result = await SystemAPI.deleteSectionEntry(proposal.section, proposal.entryId ?? '', {
+        actor: 'mavis_ai',
+        authorized: true,
+      });
+
+      if (!result.ok) {
+        throw new Error('Delete failed');
+      }
+    } else {
+      const result = await SystemAPI.upsertSectionEntry(proposal.section, proposal.entry ?? {}, {
+        id: proposal.entryId,
+        actor: 'mavis_ai',
+        authorized: true,
+      });
+
+      if (!result.ok) {
+        throw new Error('Write failed');
+      }
+    }
+
+    const refreshed = await refreshFromBackend();
+    console.log('[MAVIS-PRIME] Backend refresh after CRUD:', refreshed);
+    return true;
+  }, [refreshFromBackend]);
+
+  const { messages, sendMessage, setMessages, error, status, stop } = useRorkAgent({
+    tools: {
+      readSection: createRorkTool({
+        description: 'Read backend-backed app data from any section before answering or editing.',
+        zodSchema: z.object({
+          section: z.enum(['vault', 'quests', 'skills', 'tasks', 'council']),
+          id: z.string().optional(),
+          limit: z.number().int().min(1).max(25).optional(),
+        }),
+        execute: async (toolInput) => {
+          const response = await SystemAPI.listSectionEntries(toolInput.section, toolInput.id, toolInput.limit ?? 10);
+          return JSON.stringify({
+            kind: 'section_read',
+            section: toolInput.section,
+            ...(toolInput.id ? { item: response?.item ?? null } : { items: response?.items ?? [], total: response?.total ?? 0 }),
+          });
+        },
+      }),
+      proposeCrudAction: createRorkTool({
+        description: 'Prepare a create, update, or delete proposal for vault, quests, skills, tasks, or council. Never execute without explicit user approval.',
+        zodSchema: z.object({
+          section: z.enum(['vault', 'quests', 'skills', 'tasks', 'council']),
+          action: z.enum(['create', 'update', 'delete']),
+          title: z.string().min(3).max(120),
+          summary: z.string().min(8).max(300),
+          entryId: z.string().optional(),
+          entry: z.record(z.string(), z.unknown()).optional(),
+        }),
+        execute: async (toolInput) => {
+          const proposal: CrudProposal = {
+            kind: 'crud_proposal',
+            proposalId: `crud-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            section: toolInput.section,
+            action: toolInput.action,
+            title: toolInput.title,
+            summary: toolInput.summary,
+            entryId: toolInput.entryId,
+            entry: toolInput.entry,
+          };
+
+          return JSON.stringify(proposal);
+        },
+      }),
+    },
+  });
   const isStreaming = (status === 'streaming' || status === 'submitted') && !manualStopped;
 
   useEffect(() => {
@@ -273,7 +393,7 @@ SYSTEM RULES
 
   useEffect(() => {
     const loadRuntimeContext = async () => {
-      const runtimeContext = await SystemAPI.getAiRuntimeContext('all', false, 50);
+      const runtimeContext = await SystemAPI.getAiRuntimeContext('overview', false, 12);
       const prompt = runtimeContext?.prompt;
       if (prompt) {
         setRuntimeContextPrompt(prompt);
@@ -862,19 +982,75 @@ SYSTEM RULES
                       const partKey = `${uniqueKey}-part-${partIdx}`;
                       return (
                         <Text key={partKey} style={styles.messageContent}>
-                          {textPart.text}
+                          {getDisplayMessageText(msg.role, textPart.text)}
                         </Text>
                       );
                     }
                     if (part.type === 'tool') {
                       const toolPart = part as any;
+                      const partKey = `${uniqueKey}-tool-${partIdx}`;
                       if (toolPart.state === 'input-streaming' || toolPart.state === 'input-available') {
-                        const partKey = `${uniqueKey}-tool-${partIdx}`;
                         return (
                           <Text key={partKey} style={[styles.messageContent, { fontStyle: 'italic', opacity: 0.7 }]}>
                             Thinking...
                           </Text>
                         );
+                      }
+
+                      if (toolPart.state === 'output-available' && typeof toolPart.output === 'string') {
+                        try {
+                          const parsedOutput = JSON.parse(toolPart.output) as CrudProposal | { kind?: string; section?: string; total?: number };
+
+                          if (parsedOutput.kind === 'crud_proposal') {
+                            const proposal = parsedOutput as CrudProposal;
+                            return (
+                              <View key={partKey} style={styles.toolCard}>
+                                <Text style={styles.toolTitle}>{proposal.title}</Text>
+                                <Text style={styles.toolMeta}>{proposal.action.toUpperCase()} • {proposal.section.toUpperCase()}</Text>
+                                <Text style={styles.toolSummary}>{proposal.summary}</Text>
+                                <TouchableOpacity
+                                  testID={`approve-${proposal.proposalId}`}
+                                  style={styles.toolApproveButton}
+                                  onPress={() => {
+                                    Alert.alert('Approve AI change', `${proposal.action.toUpperCase()} ${proposal.section.toUpperCase()}?`, [
+                                      { text: 'Cancel', style: 'cancel' },
+                                      {
+                                        text: 'Approve',
+                                        onPress: () => {
+                                          void executeCrudProposal(proposal)
+                                            .then(() => {
+                                              setMessages((prev) => [...prev, {
+                                                id: `crud-approved-${Date.now()}`,
+                                                role: 'assistant',
+                                                parts: [{ type: 'text', text: `Approved and synced: ${proposal.title}` }],
+                                              }]);
+                                            })
+                                            .catch((crudError) => {
+                                              console.error('[MAVIS-PRIME] CRUD approval failed:', crudError);
+                                              Alert.alert('Change failed', 'The approved change could not be saved.');
+                                            });
+                                        },
+                                      },
+                                    ]);
+                                  }}
+                                >
+                                  <Text style={styles.toolApproveText}>Approve</Text>
+                                </TouchableOpacity>
+                              </View>
+                            );
+                          }
+
+                          if (parsedOutput.kind === 'section_read') {
+                            return (
+                              <View key={partKey} style={styles.toolCard}>
+                                <Text style={styles.toolTitle}>Backend read</Text>
+                                <Text style={styles.toolSummary}>{`${parsedOutput.section ?? 'section'} loaded${typeof parsedOutput.total === 'number' ? ` • ${parsedOutput.total} items` : ''}`}</Text>
+                              </View>
+                            );
+                          }
+                        } catch (parseError) {
+                          console.log('[MAVIS-PRIME] Tool output parse skipped:', parseError);
+                        }
                       }
                     }
                     return null;
@@ -1303,6 +1479,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600' as const,
     color: '#FFD700',
+  },
+  toolCard: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    gap: 6,
+  },
+  toolTitle: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
+  },
+  toolMeta: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: '#FFD700',
+    letterSpacing: 0.6,
+  },
+  toolSummary: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#BFBFBF',
+  },
+  toolApproveButton: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(148, 0, 211, 0.28)',
+    borderWidth: 1,
+    borderColor: '#9400D3',
+  },
+  toolApproveText: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
   },
   quickActionsContainer: {
     position: 'absolute',

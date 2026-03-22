@@ -26,13 +26,13 @@ export default publicProcedure
 
     if (!gameState) {
       return {
-        prompt: 'Use backend retrieval tools to inspect current game state before answering. No persisted game state is available yet.',
+        prompt: 'State is backend-backed and condensed. Read overview first, then retrieve the exact section you need. Require explicit user approval before any create, update, or delete.',
         retrieval: {
           source: 'backend_database',
           instructions: [
-            'Use the overview section first.',
-            'Then retrieve the specific section you need.',
-            'Use full entries when exact wording is required, especially for vault entries.',
+            'Read overview first.',
+            'Retrieve the exact section only when needed.',
+            'Use full entries only for exact wording or edits.',
           ],
         },
         overview: null,
@@ -68,13 +68,11 @@ export default publicProcedure
     };
 
     const prompt = [
-      'SYSTEM STATE IS CONDENSED. DO NOT EXPECT A FULL INLINE STATE DUMP.',
-      'Use backend retrieval to inspect the exact section you need before answering.',
-      'Vault entries, quests, tasks, skills, council members, memory, and cross-tab state are persisted in the backend database.',
-      'When exact wording matters, retrieve full entries for that section instead of relying on summaries.',
-      'When making writes, require explicit user authorization before create, update, or delete actions.',
-      `Current operator: ${overview.identity}. Level ${overview.level} ${overview.rank}. Form ${overview.currentForm}.`,
-      `Counts => quests:${overview.activeQuestCount}/${quests.length}, tasks:${overview.taskCount}, skills:${overview.unlockedSkillCount}/${skills.length}, vault:${overview.vaultEntryCount}, council:${overview.councilCount}, memory:${overview.memoryEntryCount}.`,
+      'CONDENSED BACKEND STATE:',
+      `Operator ${overview.identity} • L${overview.level} ${overview.rank} • Form ${overview.currentForm} • Floor ${overview.currentFloor}`,
+      `Counts q:${overview.activeQuestCount}/${quests.length} t:${overview.taskCount} s:${overview.unlockedSkillCount}/${skills.length} v:${overview.vaultEntryCount} c:${overview.councilCount} m:${overview.memoryEntryCount}`,
+      'Read overview first. Retrieve exact sections only when needed. Use full entries only for exact wording or edits.',
+      'All tabs are connected through the backend database. Require explicit user approval before any create, update, or delete.',
     ].join('\n');
 
     const allSections = {
@@ -107,9 +105,9 @@ export default publicProcedure
       retrieval: {
         source: 'backend_database',
         instructions: [
-          'Start from overview to understand the current state.',
-          'Retrieve vault with includeFullEntries=true when exact vault wording is needed.',
-          'Retrieve quests, tasks, skills, or council sections when making recommendations or edits.',
+          'Read overview to understand the current state.',
+          'Retrieve vault with includeFullEntries=true only when exact wording is needed.',
+          'Retrieve quests, tasks, skills, or council only when making recommendations or edits.',
           'Use writes only after explicit user authorization.',
         ],
       },
