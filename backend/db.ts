@@ -1,45 +1,103 @@
+type DbRecord = Record<string, any>;
+
+interface SupabaseKvRow {
+  key: string;
+  collection: string;
+  item_id: string;
+  value: DbRecord;
+  updated_at?: string;
+}
+
 const getDbConfig = () => ({
-  endpoint: process.env.EXPO_PUBLIC_RORK_DB_ENDPOINT || '',
-  namespace: process.env.EXPO_PUBLIC_RORK_DB_NAMESPACE || 'default',
-  token: process.env.EXPO_PUBLIC_RORK_DB_TOKEN || '',
+  url: process.env.EXPO_PUBLIC_SUPABASE_URL || '',
+  key: process.env.SUPABASE_API_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '',
+  namespace: process.env.EXPO_PUBLIC_RORK_DB_NAMESPACE || process.env.EXPO_PUBLIC_PROJECT_ID || 'default',
+  table: process.env.SUPABASE_KV_TABLE || 'app_kv',
 });
 
-function getHeaders(): Record<string, string> {
-  const { token, namespace } = getDbConfig();
+function getBaseHeaders(): Record<string, string> {
+  const { key } = getDbConfig();
   return {
-    'Accept': 'application/json',
+    Accept: 'application/json',
     'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    ...(namespace ? { 'db-namespace': namespace } : {}),
+    apikey: key,
+    Authorization: `Bearer ${key}`,
   };
 }
 
-export async function dbSet(collection: string, id: string, data: Record<string, any>): Promise<boolean> {
-  const { endpoint, namespace } = getDbConfig();
-  if (!endpoint) {
-    console.warn('[DB] No endpoint configured, skipping persist');
+function getStorageKey(collection: string, id: string): string {
+  const { namespace } = getDbConfig();
+  return `${namespace}:${collection}:${id}`;
+}
+
+function getTableUrl(query: string): string {
+  const { url, table } = getDbConfig();
+  return `${url}/rest/v1/${table}${query}`;
+}
+
+function normalizeValue(collection: string, id: string, data: DbRecord): DbRecord {
+  return {
+    ...data,
+    _id: id,
+    _collection: collection,
+    _updatedAt: new Date().toISOString(),
+  };
+}
+
+async function readErrorText(response: Response): Promise<string> {
+  return response.text().catch(() => '');
+}
+
+async function fetchSingleRow(collection: string, id: string): Promise<SupabaseKvRow | null> {
+  const key = getStorageKey(collection, id);
+  const response = await fetch(getTableUrl(`?select=key,collection,item_id,value,updated_at&key=eq.${encodeURIComponent(key)}&limit=1`), {
+    method: 'GET',
+    headers: getBaseHeaders(),
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const text = await readErrorText(response);
+    throw new Error(`GET ${response.status} ${text}`);
+  }
+
+  const rows = (await response.json().catch(() => [])) as SupabaseKvRow[];
+  return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+}
+
+export async function dbSet(collection: string, id: string, data: DbRecord): Promise<boolean> {
+  const { url, key } = getDbConfig();
+  if (!url || !key) {
+    console.warn('[DB] Supabase config missing, skipping persist');
     return false;
   }
 
-  const key = `${namespace}:${collection}:${id}`;
+  const now = new Date().toISOString();
+  const value = normalizeValue(collection, id, data);
+  const payload = {
+    key: getStorageKey(collection, id),
+    collection,
+    item_id: id,
+    value,
+    updated_at: now,
+  };
+
   try {
     console.log(`[DB] SET ${collection}/${id}`);
-    const response = await fetch(`${endpoint}/api/storage/set`, {
+    const response = await fetch(getTableUrl('?on_conflict=key'), {
       method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        key,
-        value: JSON.stringify({
-          ...data,
-          _id: id,
-          _collection: collection,
-          _updatedAt: new Date().toISOString(),
-        }),
-      }),
+      headers: {
+        ...getBaseHeaders(),
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
+      const text = await readErrorText(response);
       console.error(`[DB] SET failed: ${response.status} - ${text}`);
       return false;
     }
@@ -52,78 +110,46 @@ export async function dbSet(collection: string, id: string, data: Record<string,
   }
 }
 
-export async function dbGet(collection: string, id: string): Promise<any | null> {
-  const { endpoint, namespace } = getDbConfig();
-  if (!endpoint) return null;
+export async function dbGet(collection: string, id: string): Promise<DbRecord | null> {
+  const { url, key } = getDbConfig();
+  if (!url || !key) {
+    return null;
+  }
 
-  const key = `${namespace}:${collection}:${id}`;
   try {
     console.log(`[DB] GET ${collection}/${id}`);
-    const response = await fetch(`${endpoint}/api/storage/get`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ key }),
-    });
-
-    if (!response.ok) {
-      console.warn(`[DB] GET returned ${response.status} for ${collection}/${id}`);
-      return null;
-    }
-
-    const result = await response.json();
-    if (result && result.value) {
-      try {
-        return JSON.parse(result.value);
-      } catch {
-        return result.value;
-      }
-    }
-    if (result && typeof result === 'object' && result._id) {
-      return result;
-    }
-    return result || null;
+    const row = await fetchSingleRow(collection, id);
+    return row?.value ?? null;
   } catch (error) {
     console.error(`[DB] GET error for ${collection}/${id}:`, error);
     return null;
   }
 }
 
-export async function dbList(collection: string): Promise<any[]> {
-  const { endpoint, namespace } = getDbConfig();
-  if (!endpoint) return [];
+export async function dbList(collection: string): Promise<DbRecord[]> {
+  const { url, key, namespace } = getDbConfig();
+  if (!url || !key) {
+    return [];
+  }
 
-  const prefix = `${namespace}:${collection}:`;
   try {
     console.log(`[DB] LIST ${collection}`);
-    const response = await fetch(`${endpoint}/api/storage/list`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ prefix }),
+    const prefix = `${namespace}:${collection}:`;
+    const response = await fetch(getTableUrl(`?select=value,key,updated_at&key=like.${encodeURIComponent(`${prefix}%`)}&order=updated_at.desc.nullslast`), {
+      method: 'GET',
+      headers: getBaseHeaders(),
     });
 
     if (!response.ok) {
-      console.warn(`[DB] LIST returned ${response.status} for ${collection}`);
+      const text = await readErrorText(response);
+      console.warn(`[DB] LIST returned ${response.status} for ${collection}: ${text}`);
       return [];
     }
 
-    const result = await response.json();
-    if (Array.isArray(result)) {
-      return result.map(item => {
-        if (item && item.value && typeof item.value === 'string') {
-          try { return JSON.parse(item.value); } catch { return item; }
-        }
-        return item;
-      });
-    }
-    if (result && result.items && Array.isArray(result.items)) {
-      return result.items.map((item: any) => {
-        if (item && item.value && typeof item.value === 'string') {
-          try { return JSON.parse(item.value); } catch { return item; }
-        }
-        return item;
-      });
-    }
-    return [];
+    const rows = (await response.json().catch(() => [])) as Array<{ value?: DbRecord | null }>;
+    return Array.isArray(rows)
+      ? rows.map((row) => row?.value ?? null).filter((item): item is DbRecord => item !== null)
+      : [];
   } catch (error) {
     console.error(`[DB] LIST error for ${collection}:`, error);
     return [];
@@ -131,47 +157,64 @@ export async function dbList(collection: string): Promise<any[]> {
 }
 
 export async function dbDelete(collection: string, id: string): Promise<boolean> {
-  const { endpoint, namespace } = getDbConfig();
-  if (!endpoint) return false;
+  const { url, key } = getDbConfig();
+  if (!url || !key) {
+    return false;
+  }
 
-  const key = `${namespace}:${collection}:${id}`;
+  const storageKey = getStorageKey(collection, id);
   try {
     console.log(`[DB] DELETE ${collection}/${id}`);
-    const response = await fetch(`${endpoint}/api/storage/delete`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ key }),
+    const response = await fetch(getTableUrl(`?key=eq.${encodeURIComponent(storageKey)}`), {
+      method: 'DELETE',
+      headers: {
+        ...getBaseHeaders(),
+        Prefer: 'return=minimal',
+      },
     });
-    return response.ok;
+
+    if (!response.ok) {
+      const text = await readErrorText(response);
+      console.error(`[DB] DELETE failed: ${response.status} - ${text}`);
+      return false;
+    }
+
+    return true;
   } catch (error) {
     console.error(`[DB] DELETE error for ${collection}/${id}:`, error);
     return false;
   }
 }
 
-export async function dbSetBulk(collection: string, items: { id: string; data: Record<string, any> }[]): Promise<boolean> {
-  const { endpoint, namespace } = getDbConfig();
-  if (!endpoint) return false;
+export async function dbSetBulk(collection: string, items: { id: string; data: DbRecord }[]): Promise<boolean> {
+  const { url, key } = getDbConfig();
+  if (!url || !key) {
+    return false;
+  }
 
   try {
     console.log(`[DB] BULK SET ${collection} (${items.length} items)`);
-    const entries = items.map(item => ({
-      key: `${namespace}:${collection}:${item.id}`,
-      value: JSON.stringify({
-        ...item.data,
-        _id: item.id,
-        _collection: collection,
-        _updatedAt: new Date().toISOString(),
-      }),
+    const now = new Date().toISOString();
+    const payload = items.map((item) => ({
+      key: getStorageKey(collection, item.id),
+      collection,
+      item_id: item.id,
+      value: normalizeValue(collection, item.id, item.data),
+      updated_at: now,
     }));
 
-    const response = await fetch(`${endpoint}/api/storage/set-bulk`, {
+    const response = await fetch(getTableUrl('?on_conflict=key'), {
       method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ entries }),
+      headers: {
+        ...getBaseHeaders(),
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
+      const text = await readErrorText(response);
+      console.error(`[DB] BULK SET failed: ${response.status} - ${text}`);
       for (const item of items) {
         await dbSet(collection, item.id, item.data);
       }
@@ -182,7 +225,7 @@ export async function dbSetBulk(collection: string, items: { id: string; data: R
   } catch (error) {
     console.error(`[DB] BULK SET error for ${collection}:`, error);
     for (const item of items) {
-      await dbSet(collection, item.id, item.data).catch(() => {});
+      await dbSet(collection, item.id, item.data).catch(() => undefined);
     }
     return false;
   }
